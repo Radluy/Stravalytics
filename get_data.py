@@ -1,79 +1,63 @@
-import argparse
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
 import requests 
 import json
-
+from stravalib.client import Client
+import pickle
+import time
+from os import path
 
 with open('config.json', 'r') as f:
     config = json.load(f)
 
+def main():
+    client = Client()
+    MY_STRAVA_CLIENT_ID, MY_STRAVA_CLIENT_SECRET = config['client_id'], config['client_secret']
+    
+    if not path.isfile('access_token.pickle'):
+        #url = client.authorization_url(client_id=MY_STRAVA_CLIENT_ID,
+        #                        redirect_uri='http://127.0.0.1:5000/authorization',
+        #                        scope=['read_all','activity:read_all']
+        #                        )
+        
+        CODE = 'ffd466e4ebc24b90d39d502290664f5b878f09c7'
+        access_token = client.exchange_code_for_token(client_id=MY_STRAVA_CLIENT_ID,
+                                              client_secret=MY_STRAVA_CLIENT_SECRET,
+                                              code=CODE)
+        with open('access_token.pickle', 'wb') as f:
+            pickle.dump(access_token, f)
 
-class S(BaseHTTPRequestHandler):
-    def do_GET(self):
-        print(self.path)
-        if self.path.startswith('/exchange_token'):
-            self.thankyou_page()
-            return
+    with open('access_token.pickle', 'rb') as f:
+        access_token = pickle.load(f)
+        
+    print('Latest access token read from file:')
+    print(access_token)
 
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
-        self.end_headers()
-        self.wfile.write(bytes(f"<html><head><title></title></head>", "utf-8"))
-        self.wfile.write(bytes("<body>", "utf-8"))
-        self.wfile.write(bytes(f"<a href=http://www.strava.com/oauth/authorize?client_id={config['strava_client_id']}&response_type=code&redirect_uri=http://localhost:9090/exchange_token&approval_prompt=force&scope=activity:read_all>Authorize here!</a>", "utf-8"))
-        self.wfile.write(bytes("</body></html>", "utf-8"))
+    if time.time() > access_token['expires_at']:
+        print('Token has expired, will refresh')
+        refresh_response = client.refresh_access_token(client_id=MY_STRAVA_CLIENT_ID, 
+                                                client_secret=MY_STRAVA_CLIENT_SECRET, 
+                                                refresh_token=access_token['refresh_token'])
+        access_token = refresh_response
+        with open('access_token.pickle', 'wb') as f:
+            pickle.dump(refresh_response, f)
+        print('Refreshed token saved to file')
 
-    # After-verify page
-    def thankyou_page(self):
+        client.access_token = refresh_response['access_token']
+        client.refresh_token = refresh_response['refresh_token']
+        client.token_expires_at = refresh_response['expires_at']
+            
+    else:
+        print('Token still valid, expires at {}'
+            .format(time.strftime("%a, %d %b %Y %H:%M:%S %Z", time.localtime(access_token['expires_at']))))
 
-        dicts = parse_qs(urlparse(self.requestline).query)
-        try:
-            code = dicts['code'][0]
-        except KeyError:
-            self.send_response(200)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-            self.wfile.write(bytes(f"<html><head><title></title></head>", "utf-8"))
-            self.wfile.write(bytes("<body>", "utf-8"))
-            self.wfile.write(bytes(f"<a href=http://www.strava.com/oauth/authorize?client_id={config['strava_client_id']}&response_type=code&redirect_uri=http://localhost:9090/exchange_token&approval_prompt=force&scope=activity:read_all>Authorize here!</a>", "utf-8"))
-            self.wfile.write(bytes("</body></html>", "utf-8"))
-            return
-
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
-        self.end_headers()
-        self.wfile.write(bytes("<html><head><title></title></head>", "utf-8"))
-        self.wfile.write(bytes("<body>Thank you for verifying!", "utf-8"))
-        self.wfile.write(bytes("</body></html>", "utf-8"))
-
-        self.exchange_tokens(dicts)
-
-    # first time token exchange
-    def exchange_tokens(self, dicts):
-        code = dicts['code'][0]
-        params = {
-                    'client_id': f"{config['strava_client_id']}",
-                    'client_secret': f"{config['strava_client_secret']}",
-                    'code': f"{code}",
-                    'grant_type': "authorization_code"
-                 }
-        response = requests.post("https://www.strava.com/api/v3/oauth/token", params=params)
-        jfile = response.json()
-        with open('config.json', 'r') as f:
-            config_new = json.load(f)
-            config_new['strava_refresh_token'] = jfile['refresh_token']
-            config_new['strava_access_token'] = jfile['access_token']
-            config_new['strava_token_expiration'] = jfile['expires_at']
-        with open('config.json', 'w') as f:
-            json.dump(config_new, f)
+        client.access_token = access_token['access_token']
+        client.refresh_token = access_token['refresh_token']
+        client.token_expires_at = access_token['expires_at']
 
 
-def run(server_class=HTTPServer, handler_class=S, addr="localhost", port=9090):
-    server_address = (addr, port)
-    httpd = server_class(server_address, handler_class)
 
-    print(f"Starting httpd server on {addr}:{port}")
-    httpd.serve_forever()
 
-run()
+
+
+
+if __name__=='__main__':
+    main()
